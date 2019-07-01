@@ -1034,6 +1034,16 @@ insert_wrk_tbl = """
 				FROM V_CARTERS_MAKEABLESELLABLETABL
 				"""
 
+#Select statements to pull data
+hub_query ='select flex_id from CDC_FLEX_MAKEABLESELLABLE'
+flex_query ='select * from WRK_CARTERS_MAKEABLESELLABLE'
+
+#Update action flag back on flex db
+update_flex="""
+UPDATE carters_makeablesellabletable
+   SET action_flag = 0
+ WHERE flex_id = :b_FLEX_ID AND last_updated = :b_LAST_UPDATED AND ACTION_FLAG = :b_ACTION_FLAG
+"""
 
 #update and insert queries to the target system PHUB
 dml_update=[sql_update]

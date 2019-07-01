@@ -15,8 +15,7 @@ Run the pre sql statement(s) needed before extracting data from
 Flex to the Product HUB
 """
 
-def pre_sql(cur,conn):
-    assert isinstance(presql, object)
+def pre_sql(flex_cur,conn):
     for query in presql:
         flex_cur.execute(query)
         conn.commit()
@@ -751,12 +750,27 @@ def etl_process(flexconn,hubconn,flex_cur,hub_cur):
                 print('FLEX_ID: ' + row.FLEX_ID + ' error: ' + str(e))
                 hubconn.rollback()
                 break
-            
+                
     print('Inserted total row(s): ' + str(inscount))            
-    print('Updated total row(s): ' + str(updcount))
+    print('Updated total row(s): ' + str(updcount))                
+                
+    """
+    Update the action flag to 0 on 
+    the FLEX database
+    """
+    try:
+        flex_cur.execute(update_flex,{'b_FLEX_ID':row.FLEX_ID,
+                                      'b_LAST_UPDATED':row.LAST_UPDATED,
+                                      'b_ACTION_FLAG':row.ACTION_FLAG})
+        flexconn.commit()
+        
+    except Exception as e:
+        print('FLEX_ID: ' + row.FLEX_ID + ' error: ' + str(e) + '.  Error happened during update to flex action flag')
+        flexconn.rollback()      
+        
     
 def post_sql(hub_cur):
-    #Post SQL procedure
+    #Post SQL Runs procedure in the HUB
     
     proc_nm ='PKG_RUN_JOBS.PROC_RUN_JOB_STEPS'
     job_nm = 'POST_BULK_CDC_FLEX'
@@ -764,8 +778,11 @@ def post_sql(hub_cur):
     job_seq = 'NULL'
 
     hub_cur.callproc(proc_nm,[job_nm,load_type,job_seq])
+    
 
 def main():
+    
+    print('Start flow')
     #read db cfg file to connect to the databases
     config = configparser.ConfigParser()
     config.read_file(open('db.cfg'))
@@ -785,10 +802,20 @@ def main():
     hub_cur = hubconn.cursor()
     flex_cur = flexconn.cursor()
 
+    start_time = datetime.now()
+    
     #call processes needed to execute ETL
-    pre_sql(flexconn,flex_cur)
+    print('>>> Start ETL process @ ' + str(start_time) + ' <<<')
+    pre_sql(flex_cur,flexconn)
     etl_process(flexconn,hubconn,flex_cur,hub_cur)
     post_sql(hub_cur)
+    
+    end_time =datetime.now()
+    print('>>> End ETL process @ ' + str(end_time) + ' <<<')
+    
+    run_time = end_time - start_time
+    
+    print('Total runtime: ' + str(run_time))
     
     #close all connections and cursors
     flex_cur.close()
@@ -796,3 +823,5 @@ def main():
     hubconn.close()
     flexconn.close()
 
+if __name__ == "__main__":
+    main()
