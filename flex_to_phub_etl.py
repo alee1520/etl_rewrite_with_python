@@ -2,13 +2,21 @@ import cx_Oracle
 import os
 import configparser
 import pandas as pd
-import numpy as np
+#import logging
 import sqlalchemy
 from datetime import date
 from datetime import time
 from datetime import datetime
 from flex_to_phub_dml import *
 
+
+"""
+Set log path and level of logging
+"""
+#LOG_FILENAME = 'C:\flex_to_phub_etl.log'
+
+#etl_logger = logging.getLogger('ETLLogger')
+#etl_logger.setLevel(logging.
 
 """
 Run the pre sql statement(s) needed before extracting data from
@@ -19,11 +27,13 @@ def pre_sql(flex_cur,conn):
     for query in presql:
         flex_cur.execute(query)
         conn.commit()
+        
 """
 Convert NaN, and NaT to None value = NULL
 This will allow Oracle to accept updates and inserts to 
 attributes that have NULL
 """
+
 def convert_to_null(v_num):
     x =pd.isnull(v_num)
     if x == True:
@@ -43,7 +53,19 @@ def etl_process(flexconn,hubconn,flex_cur,hub_cur):
     
     inscount =0
     updcount =0
-
+    etl_status = None
+    
+    """
+    Check to see if there's any data to process
+    """
+    data_cnt = dfDelta.FLEX_ID.count()
+    
+    if data_cnt == 0:
+        print('No data found to be processed ... ')
+        print('ETL process will end')
+        return       
+    
+    
     """
     Loop though the dataframe and apply insert if _merge = left_only
     update if _merge=both
@@ -398,13 +420,23 @@ def etl_process(flexconn,hubconn,flex_cur,hub_cur):
                                        })
                 inscount = inscount +1
                 hubconn.commit()
+                etl_status = 'Success'
             except Exception as e:
                 print('FLEX_ID: ' + row.FLEX_ID + ' error: ' + str(e))
                 hubconn.rollback()
+                etl_status = 'Fail'
                 break
 
         if row._merge =='both':
             try:
+                
+                # Archive data from cdc_flex_makeablesellable table 
+                # Data only get archived when the data assoicated with the flex id was updated
+                
+                hub_cur.execute(sql_insert_arc,{'b_FLEX_ID' : row.FLEX_ID})
+                
+                #Update data in the cdc_flex_makeablesellabe to capture changes from FLEX db
+                
                 hub_cur.execute(sql_update,{
                     'b_ACTION_FLAG' : convert_to_null(row.ACTION_FLAG),
                     'b_AGE_CODE' : convert_to_null(row.AGE_CODE),
@@ -745,28 +777,32 @@ def etl_process(flexconn,hubconn,flex_cur,hub_cur):
 
                 updcount = updcount +1
                 hubconn.commit()
+                etl_status = 'Success'
 
             except Exception as e:
                 print('FLEX_ID: ' + row.FLEX_ID + ' error: ' + str(e))
                 hubconn.rollback()
+                etl_status = 'Fail'
                 break
                 
     print('Inserted total row(s): ' + str(inscount))            
-    print('Updated total row(s): ' + str(updcount))                
+    print('Updated total row(s): ' + str(updcount))    
+    print('Archived total row(s): ' + str(updcount))            
                 
     """
     Update the action flag to 0 on 
     the FLEX database
     """
-    try:
-        flex_cur.execute(update_flex,{'b_FLEX_ID':row.FLEX_ID,
-                                      'b_LAST_UPDATED':row.LAST_UPDATED,
-                                      'b_ACTION_FLAG':row.ACTION_FLAG})
-        flexconn.commit()
-        
-    except Exception as e:
-        print('FLEX_ID: ' + row.FLEX_ID + ' error: ' + str(e) + '.  Error happened during update to flex action flag')
-        flexconn.rollback()      
+    if etl_status == 'Success':    
+        try:
+            flex_cur.execute(update_flex,{'b_FLEX_ID':row.FLEX_ID,
+                                          'b_LAST_UPDATED':row.LAST_UPDATED,
+                                          'b_ACTION_FLAG':row.ACTION_FLAG})
+            flexconn.commit()
+
+        except Exception as e:
+            print('FLEX_ID: ' + row.FLEX_ID + ' error: ' + str(e) + '.  Error happened during update to flex action flag')
+            flexconn.rollback()      
         
     
 def post_sql(hub_cur):
@@ -782,7 +818,10 @@ def post_sql(hub_cur):
 
 def main():
     
+    start_time = datetime.now()
+    
     print('Start flow')
+    print('>>> Start ETL process @ ' + str(start_time) + ' <<<')
     #read db cfg file to connect to the databases
     config = configparser.ConfigParser()
     config.read_file(open('db.cfg'))
@@ -801,13 +840,16 @@ def main():
     
     hub_cur = hubconn.cursor()
     flex_cur = flexconn.cursor()
-
-    start_time = datetime.now()
     
     #call processes needed to execute ETL
-    print('>>> Start ETL process @ ' + str(start_time) + ' <<<')
+    print('Execute pre sql logic: @' + str(datetime.now()))
+          
     pre_sql(flex_cur,flexconn)
+   
+    print('Execute etl process: @' + str(datetime.now()))
     etl_process(flexconn,hubconn,flex_cur,hub_cur)
+    
+    print('Execute post sql: @' + str(datetime.now()))
     post_sql(hub_cur)
     
     end_time =datetime.now()
@@ -822,6 +864,8 @@ def main():
     hub_cur.close()
     hubconn.close()
     flexconn.close()
+    
+    print('All cursors and database connections closed')
 
 if __name__ == "__main__":
     main()
